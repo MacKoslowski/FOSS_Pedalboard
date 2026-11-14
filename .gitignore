@@ -66,3 +66,10 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Visual Studio / CMake presets
+.vs/
+out/
+*.user
+
+# FetchContent downloads live under build/ already

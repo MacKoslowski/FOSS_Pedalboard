@@ -74,22 +74,24 @@ You will need Git, CMake 3.22 or newer, and a C++20 compiler:
 JUCE is pulled in as a git submodule, so clone with submodules:
 
 ```sh
-git clone --recurse-submodules https://github.com/<your-user>/FOSS_Pedalboard.git
+git clone --recurse-submodules https://github.com/MacKoslowski/FOSS_Pedalboard.git
 cd FOSS_Pedalboard
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release
 ```
 
 If you already cloned without submodules, run `git submodule update --init --recursive`.
+On Windows, pass `-G "Visual Studio 17 2022" -A x64` to the first `cmake` call.
+The first configure builds JUCE's helper tool and downloads Catch2 for the tests,
+so it takes a minute or two.
 
 The VST3 bundle ends up under `build/FOSSPedalboard_artefacts/Release/VST3/`.
 Copy `FOSS Pedalboard.vst3` into your system VST3 folder
 (`C:\Program Files\Common Files\VST3` on Windows, `~/Library/Audio/Plug-Ins/VST3`
 on macOS, `~/.vst3` on Linux) and rescan plugins in your DAW. A Standalone build is
-also produced for quick testing without a DAW.
-
-> These instructions describe the intended setup and will be confirmed once the
-> CMake project is committed.
+also produced under `build/FOSSPedalboard_artefacts/Release/Standalone/` for quick
+testing without a DAW.
 
 ## Architecture in one picture
 

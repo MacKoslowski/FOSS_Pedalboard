@@ -59,17 +59,27 @@ Confirmed decisions (do not relitigate without asking the user):
 
 ## Toolchain
 
-- CMake 3.22+, C++20, JUCE 8.x submodule, MSVC (VS 2022) on Windows as the primary
-  dev platform. macOS and Linux builds come via GitHub Actions later.
-- Warnings as errors on project targets (`/W4 /WX` or `-Wall -Wextra -Werror`),
-  never on JUCE itself.
+- CMake 3.22+ (4.x works), C++20, JUCE 8.0.15 submodule, MSVC (VS 2022 Build
+  Tools) on Windows as the primary dev platform. macOS and Linux builds come via
+  GitHub Actions later.
+- On this machine CMake is at `C:\Program Files\CMake\bin\cmake.exe` and may not
+  be on PATH in a fresh shell.
+- Warnings as errors on project sources only (`/WX` or `-Werror` via
+  `set_source_files_properties`), never on JUCE's translation units. MSVC `/W4`
+  flags shadowed names (C4458): do not reuse JUCE member names such as
+  `playHead` for locals.
 - Build:
 
   ```sh
   git submodule update --init --recursive
-  cmake -B build -DCMAKE_BUILD_TYPE=Release
-  cmake --build build --config Release
+  cmake -B build -G "Visual Studio 17 2022" -A x64
+  cmake --build build --config Release --parallel
+  ctest --test-dir build -C Release
   ```
+
+- JUCE's VST3 post-build step runs `vst3_helper.exe`, which loads the freshly
+  linked plugin. It can fail transiently right after linking (virus scan holding
+  the file); rebuilding fixes it.
 
 - Acceptance check once code exists: `pluginval --strictness-level 5` against the
   built VST3, plus the Catch2 test target.
@@ -100,6 +110,7 @@ src/
     BoardComponent.{h,cpp}
     SlotComponent.{h,cpp}
     PedalComponent.{h,cpp}
+    ParameterPanel.{h,cpp}     generic knob/toggle/combo grid, the default pedal editor
     InfoIcon.{h,cpp}           the "(i)" tooltip button
 assets/                        hand-drawn PNG/SVG, compiled with juce_add_binary_data
 docs/
@@ -118,7 +129,7 @@ tests/                         Catch2 unit tests for dsp/ and core/
 | `getTypeId()` | stable lowercase id used in parameter ids and saved state, e.g. `"delay"` |
 | `getDisplayName()` | handwritten label on the pedal, e.g. `"DELAY"` |
 | `getAlgorithmCredit()` | text for the "(i)" tooltip: algorithm, author/source, license |
-| `addParameters(layout)` | static: appends this pedal's parameters to the APVTS layout |
+| `addParameters(layout)` | appends this pedal's parameters to the APVTS layout (called before the APVTS exists) |
 | `attachParameters(apvts)` | caches raw atomic pointers |
 | `prepare(spec)` / `reset()` | allocate and clear state |
 | `process(juce::dsp::AudioBlock<float>&)` | realtime processing, in place |
@@ -127,13 +138,16 @@ tests/                         Catch2 unit tests for dsp/ and core/
 A pedal owns no host parameters directly and never touches the message thread
 from `process`.
 
-**`PedalChain`.** `std::array<Slot, kMaxSlots>` where a `Slot` holds a pointer to
-a `Pedal` (or null) and a bypass flag. Processes slots in order. Bypass uses a
-short equal-power crossfade so stomping never clicks. Swap, replace and remove run
-on the message thread; the audio thread sees changes through an atomically
-published order/bypass snapshot. One instance of every pedal type is created at
-construction and kept alive; a slot just points at one of them, which is what
-makes "one instance per type" cheap and allocation-free.
+**`PedalChain`.** Six `SlotState`s, each an index into the processor's pedal
+list (or `kNoPedal`) plus a bypass flag. The whole board is packed into one
+64-bit atomic (8 bits per slot), so the audio thread reads a consistent layout
+with no lock. Processes slots in order. Bypass uses a short linear crossfade so
+stomping never clicks; a pedal newly assigned to a slot is `reset()` on the
+audio thread before it is heard. Swap, replace and remove run on the message
+thread and notify the UI through `ChangeBroadcaster`. One instance of every
+pedal type is created at construction and kept alive; a slot just points at one
+of them, which is what makes "one instance per type" cheap and allocation-free.
+`writeTo`/`readFrom` persist the board as a `BOARD` child of the APVTS tree.
 
 **`PedalRegistry`.** The single list of pedal types: `typeId -> { displayName,
 factory }`. Used by the processor to instantiate pedals and by the add/replace
@@ -149,15 +163,17 @@ backed by `PedalPresetManager`.
 
 ## Adding a new pedal (checklist)
 
-1. Create `src/pedals/FooPedal.h/.cpp` deriving from `Pedal`. Header comment cites the algorithm source.
-2. Declare its parameters in `addParameters` and add the ids to `ParameterIds.h`.
+1. Create `src/pedals/FooPedal.h/.cpp` deriving from `Pedal`. Header comment cites the algorithm source. Define `kTypeId`, `kDisplayName` and `pXxx` parameter-name constants on the class.
+2. Declare its parameters in `addParameters` using `paramId (pXxx)`; cache raw pointers in `attachParameters`.
 3. Fill in `getAlgorithmCredit()` (algorithm, source, license).
-4. Register it in `PedalRegistry.cpp` (one line).
-5. Add its `PedalComponent` subclass. Ask the user for drawings of any new control; use the procedural placeholder until they arrive.
+4. Register it in `PedalRegistry.cpp` (one line) and add the files to `CMakeLists.txt`.
+5. `createEditor()` can return a `ParameterPanel` for free; write a custom component only when needed. Ask the user for drawings of any new control; use the procedural placeholder until they arrive.
 6. Add the citation to `docs/CREDITS.md`.
-7. Add factory presets if they help the user hear what the pedal does.
-8. Add a Catch2 test (silence in gives silence out, no NaNs/denormals, state round-trip, a basic behavioural check such as delay time or gate threshold).
+7. Add factory presets if they help the user hear what the pedal does (once presets exist).
+8. Add a Catch2 test in `tests/test_Pedals.cpp` (silence in gives silence out, no NaNs/denormals, a basic behavioural check such as delay time or gate threshold).
 9. Update the pedal table in `README.md`.
+
+See `docs/ADDING_A_PEDAL.md` for the longer version.
 
 ## Coding conventions
 
